@@ -1,0 +1,213 @@
+Claro, aquí tienes un programa en C para controlar la EEPROM 24FC128 utilizando GPIO (entrada/salida de propósito general), un método comúnmente conocido como "bit-banging".
+
+Este programa está diseñado para ser genérico y fácilmente adaptable a diferentes microcontroladores. Deberás implementar las funciones de bajo nivel para manipular los pines GPIO específicas para tu hardware.
+
+Características Clave de la EEPROM 24FC128
+
+Antes de sumergirnos en el código, es importante comprender las características principales de la 24FC128, obtenidas de su hoja de datos:
+
+Interfaz: I2C (Inter-Integrated Circuit).
+
+Capacidad de Memoria: 128 Kbit, lo que equivale a 16 Kbytes (16,384 bytes).[1]
+
+Organización de la Memoria: Organizada como 16,384 palabras de 8 bits.[1]
+
+Capacidad de Escritura en Página: Puede escribir hasta 64 bytes de datos en una sola operación.[2]
+
+Dirección del Dispositivo: La dirección base del dispositivo I2C es 1010 (0xA). Los tres bits menos significativos (A2, A1, A0) se pueden configurar mediante los pines de dirección de hardware, lo que permite que hasta ocho de estos dispositivos compartan el mismo bus I2C.[2]
+
+Velocidad del Reloj: Compatible con frecuencias de reloj de 100 kHz, 400 kHz y 1 MHz.[2][3]
+
+Programa en C para la EEPROM 24FC128 mediante GPIO (Bit-Banging)
+
+Este código de ejemplo demuestra las operaciones fundamentales de lectura y escritura de un solo byte en la EEPROM.
+
+Generated c
+#include <stdio.h>
+#include <stdint.h>
+
+// --- Configuración Específica del Microcontrolador (¡ADAPTAR AQUÍ!) ---
+
+// Define los pines GPIO para SCL y SDA
+#define SCL_PIN // Asigna el número de pin para SCL
+#define SDA_PIN // Asigna el número de pin para SDA
+
+// Funciones de bajo nivel para la manipulación de GPIO (DEBES IMPLEMENTARLAS)
+void gpio_init(void);
+void gpio_set_scl_dir(int dir); // 0 para salida, 1 para entrada
+void gpio_set_sda_dir(int dir); // 0 para salida, 1 para entrada
+void gpio_set_scl(int state);   // 0 para bajo, 1 para alto
+void gpio_set_sda(int state);   // 0 para bajo, 1 para alto
+int  gpio_get_sda(void);
+void delay_us(uint32_t us);     // Función de retardo en microsegundos
+
+// --- Definiciones del Protocolo I2C ---
+
+#define I2C_DELAY_US 5 // Retardo para una velocidad de reloj de ~100kHz
+
+// Dirección del dispositivo EEPROM 24FC128
+// El formato es 1010 A2 A1 A0. Si A2, A1 y A0 están a tierra, la dirección es 0x50.
+#define EEPROM_ADDRESS 0x50
+
+// --- Funciones de Bit-Banging para I2C ---
+
+void i2c_start(void) {
+    gpio_set_sda(1);
+    gpio_set_scl(1);
+    delay_us(I2C_DELAY_US);
+    gpio_set_sda(0);
+    delay_us(I2C_DELAY_US);
+    gpio_set_scl(0);
+    delay_us(I2C_DELAY_US);
+}
+
+void i2c_stop(void) {
+    gpio_set_sda(0);
+    gpio_set_scl(1);
+    delay_us(I2C_DELAY_US);
+    gpio_set_sda(1);
+    delay_us(I2C_DELAY_US);
+}
+
+// Devuelve 1 si se recibe ACK, 0 si se recibe NACK
+uint8_t i2c_write_byte(uint8_t byte) {
+    uint8_t i;
+    uint8_t ack;
+
+    for (i = 0; i < 8; i++) {
+        gpio_set_sda((byte & 0x80) ? 1 : 0);
+        byte <<= 1;
+        delay_us(I2C_DELAY_US);
+        gpio_set_scl(1);
+        delay_us(I2C_DELAY_US);
+        gpio_set_scl(0);
+    }
+
+    // Comprobar el bit de ACK
+    gpio_set_sda_dir(1); // Configurar SDA como entrada para leer el ACK
+    gpio_set_scl(1);
+    delay_us(I2C_DELAY_US);
+    ack = !gpio_get_sda();
+    gpio_set_scl(0);
+    gpio_set_sda_dir(0); // Volver a configurar SDA como salida
+    delay_us(I2C_DELAY_US);
+
+    return ack;
+}
+
+uint8_t i2c_read_byte(uint8_t send_ack) {
+    uint8_t i;
+    uint8_t byte = 0;
+
+    gpio_set_sda_dir(1); // Configurar SDA como entrada para leer
+
+    for (i = 0; i < 8; i++) {
+        byte <<= 1;
+        gpio_set_scl(1);
+        delay_us(I2C_DELAY_US);
+        if (gpio_get_sda()) {
+            byte |= 1;
+        }
+        gpio_set_scl(0);
+        delay_us(I2C_DELAY_US);
+    }
+
+    gpio_set_sda_dir(0); // Volver a configurar SDA como salida
+    gpio_set_sda(send_ack ? 0 : 1); // Enviar ACK o NACK
+    gpio_set_scl(1);
+    delay_us(I2C_DELAY_US);
+    gpio_set_scl(0);
+    gpio_set_sda(1);
+
+    return byte;
+}
+
+// --- Funciones de la EEPROM 24FC128 ---
+
+void eeprom_write_byte(uint16_t address, uint8_t data) {
+    i2c_start();
+    i2c_write_byte(EEPROM_ADDRESS << 1 | 0); // Dirección del dispositivo + bit de escritura
+    i2c_write_byte((uint8_t)(address >> 8));    // Dirección de memoria alta
+    i2c_write_byte((uint8_t)(address & 0xFF)); // Dirección de memoria baja
+    i2c_write_byte(data);
+    i2c_stop();
+    delay_us(5000); // Esperar a que se complete el ciclo de escritura interno (tWR)
+}
+
+uint8_t eeprom_read_byte(uint16_t address) {
+    uint8_t data;
+
+    i2c_start();
+    i2c_write_byte(EEPROM_ADDRESS << 1 | 0); // Dirección del dispositivo + bit de escritura
+    i2c_write_byte((uint8_t)(address >> 8));    // Dirección de memoria alta
+    i2c_write_byte((uint8_t)(address & 0xFF)); // Dirección de memoria baja
+
+    i2c_start(); // Inicio repetido
+    i2c_write_byte(EEPROM_ADDRESS << 1 | 1); // Dirección del dispositivo + bit de lectura
+    data = i2c_read_byte(0); // Leer el dato y enviar NACK
+    i2c_stop();
+
+    return data;
+}
+
+// --- Programa Principal de Ejemplo ---
+
+int main() {
+    // Inicializar el hardware de GPIO
+    gpio_init();
+
+    uint16_t mem_address = 0x00A5;
+    uint8_t write_data = 0x42;
+    uint8_t read_data;
+
+    printf("Escribiendo 0x%02X en la dirección 0x%04X...\n", write_data, mem_address);
+    eeprom_write_byte(mem_address, write_data);
+    printf("Escritura completada.\n");
+
+    read_data = eeprom_read_byte(mem_address);
+    printf("Leyendo desde la dirección 0x%04X: 0x%02X\n", mem_address, read_data);
+
+    if (read_data == write_data) {
+        printf("¡Éxito! El dato leído coincide con el dato escrito.\n");
+    } else {
+        printf("¡Error! El dato leído no coincide con el dato escrito.\n");
+    }
+
+    return 0;
+}
+
+Cómo Adaptar el Código a tu Microcontrolador
+
+Definición de Pines: En la sección Configuración Específica del Microcontrolador, define SCL_PIN y SDA_PIN con los números de pin correspondientes en tu hardware.
+
+Implementación de las Funciones GPIO: La parte más crucial es implementar las funciones de bajo nivel para la manipulación de GPIO:
+
+gpio_init(): Aquí debes configurar los pines SCL y SDA como salidas de drenador abierto (open-drain) o emular este comportamiento. Una práctica común es cambiar la dirección del pin entre salida (para poner la línea en bajo) y entrada (para permitir que la resistencia de pull-up la ponga en alto).[4][5]
+
+gpio_set_scl_dir(int dir) y gpio_set_sda_dir(int dir): Estas funciones deberían cambiar la dirección del pin (entrada/salida).
+
+gpio_set_scl(int state) y gpio_set_sda(int state): Estas funciones deberían establecer el nivel de salida del pin (alto/bajo).
+
+gpio_get_sda(): Esta función debería leer el nivel lógico del pin SDA.
+
+delay_us(uint32_t us): Implementa una función de retardo precisa en microsegundos. Esto es importante para cumplir con los tiempos del protocolo I2C.[5]
+
+Resistencias de Pull-Up: No olvides conectar resistencias de pull-up (típicamente de 2kΩ a 10kΩ) en las líneas SCL y SDA a la tensión de alimentación (VCC).[4] Estas son necesarias porque I2C es un bus de drenador abierto.
+
+Dirección del Dispositivo: Asegúrate de que EEPROM_ADDRESS coincida con la configuración de los pines de dirección de hardware (A0, A1, A2) de tu chip 24FC128. Si los tres están conectados a tierra, la dirección de 7 bits será 1010000, que es 0x50.
+
+Este programa proporciona una base sólida para comunicarte con una EEPROM 24FC128 utilizando GPIO. Puedes ampliarlo para incluir funciones para la escritura de páginas y lecturas secuenciales según lo documentado en la hoja de datos del dispositivo.
+
+Sources
+help
+alldatasheet.com
+sigmaelectronica.net
+scribd.com
+manuals.plus
+stackexchange.com
+Google Search Suggestions
+Display of Search Suggestions is required when using Grounding with Google Search. Learn more
+24FC128 datasheet
+24FC128 I2C C code example GPIO
+I2C bit banging C code for EEPROM
+how to write I2C driver using GPIO in C
